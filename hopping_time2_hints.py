@@ -12,7 +12,7 @@ def V(x):
 
 def f(x):
 # fill in as in nonlinear_hints.py:
-    # calculate -dV/dx:
+    # calculate -dV/dx: ie "negative force"
     return 4*k*x*(1-x**2)
 
 Seed = 10000

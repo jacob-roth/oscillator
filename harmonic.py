@@ -41,7 +41,7 @@ def run_spring(t_max, x=0.01, v=0.01):
     a = []
     for t in arange(0,t_max,dt):
         x += v * dt
-        v += dt*(-gamma*v - x) + amplitude*standard_normal()
+        v += dt*(-gamma*v + -x) + amplitude*standard_normal()
         # x += dt*(-k*x + amplitude*standard_normal())
         a.append(x)
 
