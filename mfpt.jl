@@ -1,5 +1,9 @@
 using Random
 using LinearAlgebra
+using Statistics
+using PyPlot
+using Formatting
+
 
 ## -----------------------------------------------------------------------------
 ## structures
@@ -50,8 +54,8 @@ mutable struct Hist
     times::Array{Float64,1}
     qhist::Array{Float64,1}
 end
-function Hist(nsteps)
-    return Hist(0, zeros(nsteps), zeros(nsteps))
+function Hist(; crosses::Int64, times::Array{Float64,1}, qhist::Array{Float64,1})
+    return Hist(crosses, times, qhist)
 end
 ## -----------------------------------------------------------------------------
 
@@ -59,17 +63,17 @@ end
 ## -----------------------------------------------------------------------------
 ## functions
 ## -----------------------------------------------------------------------------
-function V(x::Float64, k::Float64)
-    return k*(1-x^2)^2
+function V(x, k)
+    return k .* (1.0 .- x.^2).^2
 end
-function dVdx(x::Float64, k::Float64)
-    return -4*k*x*(1-x^2)
+function dVdx(x, k)
+    return -4.0 .* k .* x .* (1 .- x.^2)
 end
 function V!(out::Float64, x::Float64, k::Float64)
-    out = k*(1-x^2)^2
+    out = k .* (1.0 .- x.^2).^2
 end
 function dVdx!(out::Float64, x::Float64, k::Float64)
-    our = -4*k*x*(1-x^2)
+    our = -4.0 .* k .* x .* (1 .- x.^2)
 end
 ## -----------------------------------------------------------------------------
 
@@ -88,7 +92,7 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     j::Int64 = 1
     crosses::Int64 = 0
     qhist = zeros(Float64, N)
-    times = zeros(Float64, 1000)
+    times = zeros(Float64, max_cross)
     zetas = randn(N)
 
     ## integrate
@@ -111,7 +115,7 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     end
 
     ## return
-    H = Hist(crosses, qhist, diff([0; times[1:j]]))
+    H = Hist(crosses=crosses, qhist=qhist, times=diff([0; times[1:j]]))
     return H
 end
 function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
@@ -125,7 +129,7 @@ function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     j::Int64 = 1
     crosses::Int64 = 0
     qhist = zeros(Float64, N)
-    times = zeros(Float64, 1000)
+    times = zeros(Float64, max_cross)
     zetas = randn(N)
 
     ## integrate
@@ -151,10 +155,11 @@ function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     end
 
     ## return
-    H = Hist(crosses, qhist, diff([0; times[1:j]]))
+    H = Hist(crosses=crosses, qhist=qhist, times=diff([0; times[1:j]]))
     return H
 end
-function integrator_fix(SS::State, N::Int64; PP::Params, CC::Cache, ut::Symbol)
+function integrator_fix(SS::State, N::Int64; PP::Params, CC::Cache, ut::Symbol,
+                                             max_cross::Int64=Int64(1e4))
     """
     N: number of steps
     limit: q-threshold
@@ -169,10 +174,73 @@ function integrator_fix(SS::State, N::Int64; PP::Params, CC::Cache, ut::Symbol)
     ## sigma & integrate
     if ut == :euler!
         sigma = sqrt(2.0 * P.h * P.gamma * P.tau)
-        H = euler_fix(S::State, N::Int64; sigma=sigma, P=P, C=CC)
+        H = euler_fix(S::State, N::Int64; sigma=sigma, P=P, C=CC, max_cross=max_cross)
     elseif ut == :baoab!
         sigma = sqrt(P.tau * (1.0 - exp(-2.0 * P.gamma * P.h)))
-        H = baoab_fix(S::State, N::Int64; sigma=sigma, P=P, C=CC)
+        H = baoab_fix(S::State, N::Int64; sigma=sigma, P=P, C=CC, max_cross=max_cross)
     end
     return H
+end
+## -----------------------------------------------------------------------------
+
+
+## -----------------------------------------------------------------------------
+## diagnostics
+## -----------------------------------------------------------------------------
+function plot_diagnostics(H::Hist, P::Params; subsample=1000)
+    ## histogram / density
+    fig = figure(figsize=(10, 8))
+    ax1 = fig[:add_subplot](2,1,1)
+    n, bins, patches = ax1[:hist](H.qhist, 100, normed=1, label="numerical");
+    println(patches)
+    dd = bins[2] - bins[1]
+    xmin = -2.0
+    xmax = 2.0
+    q = collect(range(xmin, stop=xmax, step=dd))
+    PP = exp.(-V(q, P.k) / P.tau)
+    den = sum(PP) * dd
+    ax1[:plot](q, PP ./ den, label="analytic")
+    ax1[:set_xlim](xmin, xmax)
+    legend()
+
+    ## time series
+    ax2 = fig[:add_subplot](2,1,2)
+    ts = collect(range(P.h, stop=length(H.qhist)*P.h, step=P.h))[1:subsample:end]
+    qs = H.qhist[1:subsample:end]
+    ax2[:plot](ts, qs, label="position time-series")
+    legend()
+    fig[:show]()
+end
+function compare_results(H::Hist, P::Params; S0::State)
+    q0 = S0.q
+    qt = P.limit
+    Etau_ana = exp(abs(V(qt, P.k) - V(q0, P.k)) / P.tau)
+    lam_ana = exp(-abs(V(qt, P.k) - V(q0, P.k)) / P.tau) / (2.0 * pi * P.gamma)
+
+    Etau_dns_1 = (H.crosses / length(H.qhist)) / P.h
+    Etau_dns_2 = mean(H.times)
+    lam_dns = 1.0 / Etau_dns_2
+
+    println("crosses ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    printfmt("DNS crosses                                          : {:d}\n", H.crosses)
+    printfmt("DNS mean(time to cross) = (crosses / nsteps) / dt    : {:0.3e}\n\n", Etau_dns_1)
+
+    println("exit time ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    printfmt("DNS-time mean(time to cross)                         : {:0.3e}\n", Etau_dns_2)
+    printfmt("ANA-time E[tau] = e^(|V(qt) - V(q0)| / tau)          : {:0.3e}\n", Etau_ana)
+    printfmt("exit time ratio DNS/ANA                              : {:0.3e}\n\n", Etau_dns_2/Etau_ana)
+
+    println("exit rate ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    printfmt("DNS-rate mean(rate)                                  : {:0.3e}\n", lam_dns)
+    printfmt("ANA-rate lam = 1/(2pi*gam) e^(|V(qt) - V(q0)| / tau) : {:0.3e}\n", lam_ana)
+    printfmt("exit rate ratio DNS/ANA                              : {:0.3e}\n", lam_dns/lam_ana)
+    println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+
+    out = Dict()
+    out[:Etau_dns_1] = Etau_dns_1
+    out[:Etau_dns_2] = Etau_dns_2
+    out[:Etau_ana] = Etau_ana
+    out[:lam_dns] = lam_dns
+    out[:lam_ana] = lam_ana
+    return out
 end

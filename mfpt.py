@@ -135,7 +135,7 @@ def plot_diagnostics(xhist, k=None, tau=None, dt=None):
 
 def compare_results(cross, time_to_cross,
                     x0=None, xt=None, tau=None,
-                    nsteps=None, k=None, gamma=None):
+                    nsteps=None, k=None, gamma=None, dt=None):
     Etau_ana = np.exp(np.abs(V(xt, k) - V(x0, k)) / tau)
     lam_ana = np.exp(-np.abs(V(xt, k) - V(x0, k)) / tau) / (2.0 * np.pi * gamma)
     print("DNS crosses                  : {:d}".format(cross))
@@ -147,7 +147,7 @@ def compare_results(cross, time_to_cross,
     print("DNS-rate mean(rate)          : {:0.3e}".format(1.0/np.mean(time_to_cross)))
     print("ANA-rate lambda              : {:0.3e}\n".format(lam_ana))
 
-    a = float(cross) / float(nsteps*dt)
+    a = (float(cross) / float(nsteps)) / dt
     b = np.mean(time_to_cross)
     c = Etau_ana
     d = 1.0/np.mean(time_to_cross)
@@ -177,24 +177,24 @@ if __name__ == "__main__":
 
     ## one long chain
     ## euler
-t0 = time.time()
-cross, time_to_cross, xhist = feuler(x0, v0, nsteps,
-                                  k=k, dt=dt, sigma=sigma, gamma=gamma,
-                                  threshold=threshold, seed=seed)
-t1 = time.time()
-print(t1-t0)
-plot_diagnostics(xhist, k=k, tau=tau, dt=dt)
-a, b, c, d, e = compare_results(cross, time_to_cross, x0=x0, xt=xt, tau=tau, nsteps=nsteps, gamma=gamma, k=k)
+    t0 = time.time()
+    cross, time_to_cross, xhist = feuler(x0, v0, nsteps,
+                                      k=k, dt=dt, sigma=sigma, gamma=gamma,
+                                      threshold=threshold, seed=seed)
+    t1 = time.time()
+    print(t1-t0)
+    plot_diagnostics(xhist, k=k, tau=tau, dt=dt)
+    a, b, c, d, e = compare_results(cross, time_to_cross, x0=x0, xt=xt, tau=tau, nsteps=nsteps, gamma=gamma, k=k, dt=dt)
 
-    ## baoab
-t0 = time.time()
-cross, time_to_cross, xhist = baoab(x0, v0, nsteps,
-                                  k=k, dt=dt, tau=tau, gamma=gamma,
-                                  threshold=threshold, seed=seed)
-t1 = time.time()
-print(t1-t0)
-plot_diagnostics(xhist, k=k, tau=tau, dt=dt)
-a, b, c, d, e = compare_results(cross, time_to_cross, x0=x0, xt=xt, tau=tau, nsteps=nsteps, gamma=gamma, k=k)
+        ## baoab
+    t0 = time.time()
+    cross, time_to_cross, xhist = baoab(x0, v0, nsteps,
+                                      k=k, dt=dt, tau=tau, gamma=gamma,
+                                      threshold=threshold, seed=seed)
+    t1 = time.time()
+    print(t1-t0)
+    plot_diagnostics(xhist, k=k, tau=tau, dt=dt)
+    a, b, c, d, e = compare_results(cross, time_to_cross, x0=x0, xt=xt, tau=tau, nsteps=nsteps, gamma=gamma, k=k, dt=dt)
 
 
     ## many shorter chains
@@ -205,34 +205,34 @@ a, b, c, d, e = compare_results(cross, time_to_cross, x0=x0, xt=xt, tau=tau, nst
     a, b, c, d, e = compare_results(cross, time_to_cross,
                                     x0=x0, xt=xt, tau=tau, nsteps=len(xhist), gamma=gamma, k=k)
 
-taus = [0.5, 0.4, 0.3, 0.25, 0.225, 0.2, 0.19, 0.18, 0.17, 0.16, 0.15, 0.145, 0.14, 0.135, 0.13]
-aas = []
-bs = []
-cs = []
-ds = []
-es = []
-for t in taus:
-    print("temperature = {:0.3e}".format(t))
-    print("------------------------------------")
-    sigma = np.sqrt(2.0*dt*gamma*t)
-    # cross, time_to_cross, xhist = feuler(x0, v0, nsteps,
-    #                                   k=k, dt=dt, sigma=sigma, gamma=gamma,
-    #                                   threshold=threshold, seed=seed)
-    cross, time_to_cross, xhist = baoab(x0, v0, nsteps,
-                                      k=k, dt=dt, tau=tau, gamma=gamma,
-                                      threshold=threshold, seed=seed)
-    # cross, time_to_cross, xhist = feuler_multiple(x0, v0, nsims,
-    #                               k=k, dt=dt, sigma=sigma, gamma=gamma,
-    #                               threshold=threshold, seed=seed)
-    a, b, c, d, e = compare_results(cross, time_to_cross,
-                                    x0=x0, xt=xt, tau=t, nsteps=len(xhist), gamma=gamma, k=k)
-    aas += [a]
-    bs += [b]
-    cs += [c]
-    ds += [d]
-    es += [e]
+    taus = [0.5, 0.4, 0.3, 0.25, 0.225, 0.2, 0.19, 0.18, 0.17, 0.16, 0.15, 0.145, 0.14, 0.135, 0.13]
+    aas = []
+    bs = []
+    cs = []
+    ds = []
+    es = []
+    for t in taus:
+        print("temperature = {:0.3e}".format(t))
+        print("------------------------------------")
+        sigma = np.sqrt(2.0*dt*gamma*t)
+        # cross, time_to_cross, xhist = feuler(x0, v0, nsteps,
+        #                                   k=k, dt=dt, sigma=sigma, gamma=gamma,
+        #                                   threshold=threshold, seed=seed)
+        cross, time_to_cross, xhist = baoab(x0, v0, nsteps,
+                                          k=k, dt=dt, tau=tau, gamma=gamma,
+                                          threshold=threshold, seed=seed)
+        # cross, time_to_cross, xhist = feuler_multiple(x0, v0, nsims,
+        #                               k=k, dt=dt, sigma=sigma, gamma=gamma,
+        #                               threshold=threshold, seed=seed)
+        a, b, c, d, e = compare_results(cross, time_to_cross,
+                                        x0=x0, xt=xt, tau=t, nsteps=len(xhist), gamma=gamma, k=k)
+        aas += [a]
+        bs += [b]
+        cs += [c]
+        ds += [d]
+        es += [e]
 
-plt.loglog(taus, ds, label="dns")
-plt.loglog(taus, es, label="ana")
-plt.plot(taus, [ds[i]/es[i] for i in range(len(taus))], label="d/e")
-plt.legend()
+    plt.loglog(taus, ds, label="dns")
+    plt.loglog(taus, es, label="ana")
+    plt.plot(taus, [ds[i]/es[i] for i in range(len(taus))], label="d/e")
+    plt.legend()
