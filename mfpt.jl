@@ -5,24 +5,21 @@ using LinearAlgebra
 ## structures
 ## -----------------------------------------------------------------------------
 Copy(x::T) where T = T([deepcopy(getfield(x, k)) for k ∈ fieldnames(T)]...)
-Extract(x::T) where T = [(getfield(x, k)) for k ∈ fieldnames(T)]
 mutable struct Cache
     q_12::Float64
-    q_new::Float64
     p_12::Float64
     p_12_hat::Float64
-    p_new::Float64
     q_old::Float64
     p_old::Float64
     V::Float64
     dVdx::Float64
     zeta::Float64
 end
-function Cache(; q_12::Float64=0.0, q_new::Float64=0.0,
-                 p_12::Float64=0.0, p_12_hat::Float64=0.0, p_new::Float64=0.0,
+function Cache(; q_12::Float64=0.0,
+                 p_12::Float64=0.0, p_12_hat::Float64=0.0,
                  q_old::Float64=0.0, p_old::Float64=0.0,
                  V::Float64=0.0, dVdx::Float64=0.0, zeta::Float64=0.0)
-    return Cache(q_12, q_new, p_12, p_12_hat, p_new, q_old, p_old, V, dVdx, zeta)
+    return Cache(q_12, p_12, p_12_hat, q_old, p_old, V, dVdx, zeta)
 end
 
 mutable struct State
@@ -117,7 +114,8 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     H = Hist(crosses, qhist, diff([0; times[1:j]]))
     return H
 end
-function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache)
+function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
+                                       max_cross::Int64=Int64(1e4))
     ## extract
     q = S.q; p = S.p; t = S.t; q_old = S.q
     h = P.h; gamma = P.gamma; k = P.k
@@ -136,8 +134,8 @@ function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache)
         p_12 = p - h/2 * dVdx!(f, q, k)
         q_12 = q + h/2 * p_12 / m
         p_12_hat = exp(-gamma * h) * p_12 + sigma*zetas[i]
-        q_new = q_12 + h/2 * p_12_hat / m
-        p_new = p_12_hat - h/2 * dVdx!(f, q_new, k)
+        q = q_12 + h/2 * p_12_hat / m
+        p = p_12_hat - h/2 .* dVdx!(f, q, k)
 
         ## check
         if (q - limit)*(q_old - limit) < 0.0
@@ -178,25 +176,3 @@ function integrator_fix(SS::State, N::Int64; PP::Params, CC::Cache, ut::Symbol)
     end
     return H
 end
-
-
-## -----------------------------------------------------------------------------
-## simulations
-## -----------------------------------------------------------------------------
-seed = 1234
-tau = 0.25
-h = 0.01
-k = 1.0
-m = 1.0
-gamma = 2.0
-limit = 0.0
-nsteps = Int64(1e7)
-nsims = 50
-q0 = -1.0
-p0 = 0.1
-qt = copy(limit)
-S = State(q=q0, p=p0, t=0.0)
-C = Cache()
-P = Params(seed=seed, tau=tau, h=h, k=k, m=m, gamma=gamma, limit=limit)
-
-@time H = integrator_fix(S, nsteps; PP=P, CC=C, ut=:euler!)
