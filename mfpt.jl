@@ -1,21 +1,28 @@
+using Random
+using LinearAlgebra
+
 ## -----------------------------------------------------------------------------
 ## structures
 ## -----------------------------------------------------------------------------
 Copy(x::T) where T = T([deepcopy(getfield(x, k)) for k ∈ fieldnames(T)]...)
+Extract(x::T) where T = [(getfield(x, k)) for k ∈ fieldnames(T)]
 mutable struct Cache
     q_12::Float64
     q_new::Float64
     p_12::Float64
     p_12_hat::Float64
     p_new::Float64
+    q_old::Float64
+    p_old::Float64
     V::Float64
     dVdx::Float64
     zeta::Float64
 end
 function Cache(; q_12::Float64=0.0, q_new::Float64=0.0,
                  p_12::Float64=0.0, p_12_hat::Float64=0.0, p_new::Float64=0.0,
+                 q_old::Float64=0.0, p_old::Float64=0.0,
                  V::Float64=0.0, dVdx::Float64=0.0, zeta::Float64=0.0)
-    return Cache(q_12, q_new, p_12, p_12_hat, p_new, V, dVdx, zeta)
+    return Cache(q_12, q_new, p_12, p_12_hat, p_new, q_old, p_old, V, dVdx, zeta)
 end
 
 mutable struct State
@@ -34,9 +41,11 @@ mutable struct Params
     seed::Integer
     k::Float64
     m::Float64
+    limit::Float64
 end
-function Params(; h::Float64, tau::Float64, gamma::Float64, seed::Integer, k::Float64, m::Float64)
-    return Params(h, tau, gamma, seed, k, m)
+function Params(; h::Float64, tau::Float64, gamma::Float64, seed::Integer,
+                  k::Float64, m::Float64, limit::Float64)
+    return Params(h, tau, gamma, seed, k, m, limit)
 end
 
 mutable struct Hist
@@ -71,51 +80,83 @@ end
 ## -----------------------------------------------------------------------------
 ## integrate
 ## -----------------------------------------------------------------------------
-# function baoab!(S::State, sigma::Float64, zeta::Float64; P::Params, C::Cache)
-#     """
-#     see L-M book p. 271
-#     """
-#     C.p_12 = S.p - P.h/2 * dVdx(S.q, P. k)
-#     C.q_12 = S.q + P.h/2 * C.p_12 / P.m
-#     C.p_12_hat = exp(-P.gamma * P.h) * C.p_12 + sigma*zeta
-#     C.q_new = C.q_12 + P.h/2 * C.p_12_hat / P.m
-#     C.p_new = C.p_12_hat - P.h/2 * dVdx(C.q_new, P.k)
-#
-#     S.q = C.q_new
-#     S.p = C.p_new
-#     S.t += P.h
-# end
-# function euler!(S::State, sigma::Float64, zeta::Float64; P::Params, C::Cache)
-#     S.q += S.p * P.h
-#     S.p += P.h*(-P.gamma * S.p - dVdx!(C.dVdx, S.q, P.k)) + sigma*zeta
-#     S.t += P.h
-# end
-function euler!(q::Float64, p::Float64, t::Float64, sigma::Float64, zeta::Float64; P::Params, C::Cache)
-    q += p .* P.h
-    p += P.h*(-P.gamma .* p .- dVdx(q, P.k)) .+ sigma.*zeta
-    t += P.h
-end
-function euler!(q::Float64, p::Float64, t::Float64, sigma::Float64, zeta::Float64; P::Params, C::Cache)
-    q += p .* P.h
-    p += P.h.*(-P.gamma .* p .- dVdx(q, P.k)) .+ sigma.*zeta
-    t += P.h
-end
-function baoab!(q::Float64, p::Float64, t::Float64, sigma::Float64, zeta::Float64; P::Params, C::Cache)
-    """
-    see L-M book p. 271
-    """
-    C.p_12 = p - P.h/2 * dVdx(q, P. k)
-    C.q_12 = q + P.h/2 * C.p_12 / P.m
-    C.p_12_hat = exp(-P.gamma * P.h) * C.p_12 + sigma*zeta
-    C.q_new = C.q_12 + P.h/2 * C.p_12_hat / P.m
-    C.p_new = C.p_12_hat - P.h/2 * dVdx(C.q_new, P.k)
+function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
+                                       max_cross::Int64=Int64(1e4))
+    ## extract
+    q = S.q; p = S.p; t = S.t; q_old = S.q
+    h = P.h; gamma = P.gamma; k = P.k
+    f = C.dVdx
 
-    q = C.q_new
-    p = C.p_new
-    t += P.h
+    ## setup
+    j::Int64 = 1
+    crosses::Int64 = 0
+    qhist = zeros(Float64, N)
+    times = zeros(Float64, 1000)
+    zetas = randn(N)
+
+    ## integrate
+    for i = 1:N
+        ## euler update
+        q += p .* h
+        p += h .* (-gamma .* p .- dVdx!(f, q, k)) .+ (sigma .* zetas[i])
+
+        ## check
+        if (q - limit)*(q_old - limit) < 0.0
+            j += 1
+            crosses +=1
+            times[j] = t
+        end
+
+        ## update
+        q_old = q
+        t += h
+        qhist[i] = q
+    end
+
+    ## return
+    H = Hist(crosses, qhist, diff([0; times[1:j]]))
+    return H
 end
-function integrator_fix(SS::State, N::Integer, limit::Float64;
-                        PP::Params, CC::Cache, ut::Symbol)
+function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache)
+    ## extract
+    q = S.q; p = S.p; t = S.t; q_old = S.q
+    h = P.h; gamma = P.gamma; k = P.k
+    f = C.dVdx
+
+    ## setup
+    j::Int64 = 1
+    crosses::Int64 = 0
+    qhist = zeros(Float64, N)
+    times = zeros(Float64, 1000)
+    zetas = randn(N)
+
+    ## integrate
+    for i = 1:N
+        ## baoab update
+        p_12 = p - h/2 * dVdx!(f, q, k)
+        q_12 = q + h/2 * p_12 / m
+        p_12_hat = exp(-gamma * h) * p_12 + sigma*zetas[i]
+        q_new = q_12 + h/2 * p_12_hat / m
+        p_new = p_12_hat - h/2 * dVdx!(f, q_new, k)
+
+        ## check
+        if (q - limit)*(q_old - limit) < 0.0
+            j += 1
+            crosses +=1
+            times[j] = t
+        end
+
+        ## update
+        q_old = q
+        t += h
+        qhist[i] = q
+    end
+
+    ## return
+    H = Hist(crosses, qhist, diff([0; times[1:j]]))
+    return H
+end
+function integrator_fix(SS::State, N::Int64; PP::Params, CC::Cache, ut::Symbol)
     """
     N: number of steps
     limit: q-threshold
@@ -125,69 +166,16 @@ function integrator_fix(SS::State, N::Integer, limit::Float64;
     ## setup
     S = Copy(SS)
     P = Copy(PP)
-    # H = Hist(N)
-    crosses = 0
-    qhist = zeros(N)
-    times = zeros(N)
-    zetas = randn(N)
-    q = copy(S.q)
-    p = copy(S.p)
-    t = copy(S.t)
-    q_old = copy(S.q)
+    Random.seed!(P.seed)
 
-    ## sigma
+    ## sigma & integrate
     if ut == :euler!
         sigma = sqrt(2.0 * P.h * P.gamma * P.tau)
+        H = euler_fix(S::State, N::Int64; sigma=sigma, P=P, C=CC)
     elseif ut == :baoab!
         sigma = sqrt(P.tau * (1.0 - exp(-2.0 * P.gamma * P.h)))
+        H = baoab_fix(S::State, N::Int64; sigma=sigma, P=P, C=CC)
     end
-    ## output
-    j = 1
-    # H.qhist[1] = S.q
-    qhist[1] = S.q
-
-    ## integrate euler
-    if ut == :euler!
-        for i = 2:N
-            # q_old = S.q
-            q_old = q
-            # euler!(S, sigma, zetas[i]; P=P, C=C)
-            # euler!(q,p,t, sigma, zetas[i]; P=P, C=C)
-
-            # q += p .* P.h
-            # p += P.h .* (-P.gamma .* p .- dVdx(q, P.k)) .+ sigma.*zetas[i]
-            q += p * P.h
-            p += P.h * (-P.gamma * p - dVdx(q, P.k)) + sigma*zetas[i]
-            t += P.h
-
-            # H.qhist[i] = S.q
-            # qhist[i] = S.q
-            qhist[i] = q
-            ## check & update crossing event
-            # if sign((S.q - limit)*(q_old - limit)) < 0
-            if sign((q - limit)*(q_old - limit)) < 0
-                j += 1
-                # H.crosses += 1
-                # H.times[j] = S.t
-                crosses +=1
-                # times[j] = S.t
-                times[j] = t
-            end
-        end
-    elseif ut == :baoab!
-        for i = 2:N
-            baoab!(S, sigma, zetas[i]; P=P, C=C)
-            H.qhist[i] = S.q
-            ## check & update crossing event
-            if sign((H.qhist[i] - limit)*(H.qhist[i-1] - limit)) < 0
-                j += 1
-                H.crosses += 1
-                H.times[j] = S.t
-            end
-        end
-    end
-    # H.times = diff([0; H.times[1:j]])
-    H = Hist(crosses, qhist, diff([0; times[1:j]]))
     return H
 end
 
@@ -202,13 +190,13 @@ k = 1.0
 m = 1.0
 gamma = 2.0
 limit = 0.0
-nsteps = Int(1e7)
+nsteps = Int64(1e7)
 nsims = 50
 q0 = -1.0
 p0 = 0.1
 qt = copy(limit)
 S = State(q=q0, p=p0, t=0.0)
 C = Cache()
-P = Params(seed=seed, tau=tau, h=h, k=k, m=m, gamma=gamma)
+P = Params(seed=seed, tau=tau, h=h, k=k, m=m, gamma=gamma, limit=limit)
 
-@time H = integrator_fix(S, nsteps, limit; PP=P, CC=C, ut=:euler!)
+@time H = integrator_fix(S, nsteps; PP=P, CC=C, ut=:euler!)
