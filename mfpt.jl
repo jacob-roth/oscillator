@@ -118,6 +118,84 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     H = Hist(crosses=crosses, qhist=qhist, times=diff([0; times[1:j]]))
     return H
 end
+function euler2_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
+                                       max_cross::Int64=Int64(1e4))
+    """
+    example which has wrong asymptotics; note: the h factor on the noise is weird
+    """
+    ## extract
+    q = S.q; p = S.p; t = S.t; q_old = copy(S.q)
+    h = P.h; gamma = P.gamma; k = P.k
+    f = C.dVdx
+
+    ## setup
+    j::Int64 = 1
+    crosses::Int64 = 0
+    qhist = zeros(Float64, N)
+    times = zeros(Float64, max_cross)
+    zetas = randn(N)
+
+    ## integrate
+    for i = 1:N
+        ## euler update
+        # q += (-dVdx!(f, q, k) * h^2 + gamma * q * h) / (1.0 + gamma*h) + (sigma .* zetas[i])
+        # q = (h^2*(-dVdx!(f, q, k) + gamma*q/h) + 2.0*q - q_old) / (1.0 - gamma*h) + h^(3/5)*(sigma .* zetas[i])
+        q = (h^2*(-dVdx!(f, q, k) + gamma*q/h) + 2.0*q - q_old) * (1.0 - gamma*h) + sqrt(h)*(sigma .* zetas[i])
+
+        ## check
+        if (q - limit)*(q_old - limit) < 0.0
+            j += 1
+            crosses +=1
+            times[j] = t
+        end
+
+        ## update
+        q_old = q
+        t += h
+        qhist[i] = q
+    end
+
+    ## return
+    H = Hist(crosses=crosses, qhist=qhist, times=diff([0; times[1:j]]))
+    return H
+end
+function euler3_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
+                                       max_cross::Int64=Int64(1e4))
+    ## extract
+    q = S.q; p = S.p; t = S.t; q_old = S.q
+    h = P.h; gamma = P.gamma; k = P.k
+    f = C.dVdx
+
+    ## setup
+    j::Int64 = 1
+    crosses::Int64 = 0
+    qhist = zeros(Float64, N)
+    times = zeros(Float64, max_cross)
+    zetas = randn(N)
+
+    ## integrate
+    for i = 1:N
+        ## euler update
+        q += h .* p .+ sqrt(h) * (sigma .* zetas[i])
+        p += h .* (-gamma .* p .- dVdx!(f, q, k))
+
+        ## check
+        if (q - limit)*(q_old - limit) < 0.0
+            j += 1
+            crosses +=1
+            times[j] = t
+        end
+
+        ## update
+        q_old = q
+        t += h
+        qhist[i] = q
+    end
+
+    ## return
+    H = Hist(crosses=crosses, qhist=qhist, times=diff([0; times[1:j]]))
+    return H
+end
 function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
                                        max_cross::Int64=Int64(1e4))
     ## extract
@@ -178,6 +256,12 @@ function integrator_fix(SS::State, N::Int64; PP::Params, CC::Cache, ut::Symbol,
     elseif ut == :baoab!
         sigma = sqrt(P.tau * (1.0 - exp(-2.0 * P.gamma * P.h)))
         H = baoab_fix(S::State, N::Int64; sigma=sigma, P=P, C=CC, max_cross=max_cross)
+    elseif ut == :euler2!
+        sigma = sqrt(2.0 * P.h * P.gamma * P.tau)
+        H = euler2_fix(S::State, N::Int64; sigma=sigma, P=P, C=CC, max_cross=max_cross)
+    elseif ut == :euler3!
+        sigma = sqrt(2.0 * P.h * P.gamma * P.tau)
+        H = euler3_fix(S::State, N::Int64; sigma=sigma, P=P, C=CC, max_cross=max_cross)
     end
     return H
 end
@@ -234,7 +318,7 @@ function compare_results(H::Hist, P::Params; S0::State)
     printfmt("DNS-rate mean(rate)                                  : {:0.3e}\n", lam_dns)
     printfmt("ANA-rate lam = 1/(2pi*gam) e^(|V(qt) - V(q0)| / tau) : {:0.3e}\n", lam_ana)
     printfmt("exit rate ratio DNS/ANA                              : {:0.3e}\n", lam_dns/lam_ana)
-    println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n")
 
     out = Dict()
     out[:Etau_dns_1] = Etau_dns_1
