@@ -64,22 +64,61 @@ end
 ## functions
 ## -----------------------------------------------------------------------------
 function V(x, k)
-    return k .* (1.0 .- x.^2).^2
+    # return k .* (1.0 .- x.^2).^2
+    return 0.5*k .* (x .+ 1.0).^2
 end
 function dVdx(x, k)
-    return -4.0 .* k .* x .* (1 .- x.^2)
+    # return (-4.0 * k) .* x .* (1.0 .- x.^2)
+    return k .* (x .+ 1.0)
+end
+function d2Vdx2(out::Float64, x::Float64, k::Float64)
+    # return (12.0 * k) .* (x.^2 .- 1.0/3.0)
+    return k
 end
 function V!(out::Float64, x::Float64, k::Float64)
-    out = k .* (1.0 .- x.^2).^2
+    # out = k .* (1.0 .- x.^2).^2
+    out = 0.5*k .* (x .+ 1.0).^2
 end
 function dVdx!(out::Float64, x::Float64, k::Float64)
-    our = -4.0 .* k .* x .* (1 .- x.^2)
+    # out = (-4.0 * k) .* x .* (1.0 .- x.^2)
+    out = k .* (x .+ 1.0)
+end
+function d2Vdx2!(out::Float64, x::Float64, k::Float64)
+    # out = (12.0 * k) .* (x.^2 .- 1.0/3.0)
+    out = k
+end
+function hh(x, limit)
+    return x - limit
+end
+function dhhdx(x, limit)
+end
+
+function analytic(Sbar::State, Sstar::State, P::Params)
+    ## setup
+    qbar = Sbar.q
+    qstar = Sstar.q
+    Gstar = dVdx(qstar, P.k)
+    gstar = dCdx(qstar, P.k)
+
+    ## hessians
+    Hbar = energy_h(xbar, theta)                   ## energy hess at x_eq0
+    Hstar = energy_h(xstar, theta)                 ## energy hess at x_eqc
+    hstar = constraint_h(xstar, theta, l, c_type)  ## constraint hess at x_eqc
+
+    ## calc B
+    n = gstar / norm(gstar)
+    n = reshape(n, length(xbar), 1)
+    E = nullspace(Matrix(n'))
+    B = det(E'*(Hstar - k*hstar)*E) * (norm(Gstar)^2 / det(E'*E))
+    @assert(B > 0)
+
+    pf = P.gamma *1
 end
 ## -----------------------------------------------------------------------------
 
 
 ## -----------------------------------------------------------------------------
-## integrate
+## integrate for fixed time horizon
 ## -----------------------------------------------------------------------------
 function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
                                        max_cross::Int64=Int64(1e4))
@@ -94,9 +133,10 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     qhist = zeros(Float64, N)
     times = zeros(Float64, max_cross)
     zetas = randn(N)
+    qhist[1] = q
 
     ## integrate
-    for i = 1:N
+    for i = 2:N
         ## euler update
         q += p .* h
         p += h .* (-gamma .* p .- dVdx!(f, q, k)) .+ (sigma .* zetas[i])
@@ -104,8 +144,8 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
         ## check
         if (q - limit)*(q_old - limit) < 0.0
             j += 1
-            crosses +=1
-            times[j] = t
+            crosses += 1
+            times[j] = t + h
         end
 
         ## update
@@ -134,9 +174,10 @@ function euler2_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     qhist = zeros(Float64, N)
     times = zeros(Float64, max_cross)
     zetas = randn(N)
+    qhist[1] = q
 
     ## integrate
-    for i = 1:N
+    for i = 2:N
         ## euler update
         # q += (-dVdx!(f, q, k) * h^2 + gamma * q * h) / (1.0 + gamma*h) + (sigma .* zetas[i])
         # q = (h^2*(-dVdx!(f, q, k) + gamma*q/h) + 2.0*q - q_old) / (1.0 - gamma*h) + h^(3/5)*(sigma .* zetas[i])
@@ -145,13 +186,13 @@ function euler2_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
         ## check
         if (q - limit)*(q_old - limit) < 0.0
             j += 1
-            crosses +=1
+            crosses += 1
             times[j] = t
         end
 
         ## update
         q_old = q
-        t += h
+        t += h + h
         qhist[i] = q
     end
 
@@ -172,9 +213,10 @@ function euler3_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     qhist = zeros(Float64, N)
     times = zeros(Float64, max_cross)
     zetas = randn(N)
+    qhist[1] = q
 
     ## integrate
-    for i = 1:N
+    for i = 2:N
         ## euler update
         q += h .* p .+ sqrt(h) * (sigma .* zetas[i])
         p += h .* (-gamma .* p .- dVdx!(f, q, k))
@@ -182,8 +224,8 @@ function euler3_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
         ## check
         if (q - limit)*(q_old - limit) < 0.0
             j += 1
-            crosses +=1
-            times[j] = t
+            crosses += 1
+            times[j] = t + h
         end
 
         ## update
@@ -209,9 +251,10 @@ function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     qhist = zeros(Float64, N)
     times = zeros(Float64, max_cross)
     zetas = randn(N)
+    qhist[1] = q
 
     ## integrate
-    for i = 1:N
+    for i = 2:N
         ## baoab update
         p_12 = p - h/2 * dVdx!(f, q, k)
         q_12 = q + h/2 * p_12 / m
@@ -222,8 +265,8 @@ function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
         ## check
         if (q - limit)*(q_old - limit) < 0.0
             j += 1
-            crosses +=1
-            times[j] = t
+            crosses += 1
+            times[j] = t + h
         end
 
         ## update
@@ -241,7 +284,6 @@ function integrator_fix(SS::State, N::Int64; PP::Params, CC::Cache, ut::Symbol,
     """
     N: number of steps
     limit: q-threshold
-    tb: traceback option (T/F)
     ut: update type option (:euler!, :baoab!)
     """
     ## setup
@@ -267,6 +309,97 @@ function integrator_fix(SS::State, N::Int64; PP::Params, CC::Cache, ut::Symbol,
 end
 ## -----------------------------------------------------------------------------
 
+
+## -----------------------------------------------------------------------------
+## integrate for variable time horizon
+## -----------------------------------------------------------------------------
+function euler_fix_fail(S::State, N::Int64; sigma::Float64, P::Params, C::Cache)
+    """
+    run `N` steps of euler until failure
+    """
+    ## extract
+    q = S.q; p = S.p; t = S.t; q_old = S.q
+    h = P.h; gamma = P.gamma; k = P.k; limit = P.limit
+    f = C.dVdx
+
+    ## setup
+    j::Int64 = 1
+    fail::Int64 = 0
+    qhist = zeros(Float64, N)
+    time::Float64 = 0.0
+    zetas = randn(N)
+    qhist[1] = q
+
+    ## integrate
+    for i = 2:N
+        ## euler update
+        q += p .* h
+        p += h .* (-gamma .* p .- dVdx!(f, q, k)) .+ (sigma .* zetas[i])
+
+        ## check
+        if hh(q, limit) > 0.0
+            fail = 1
+            time = t + h
+            qhist[i] = q
+            Sout = State(q=q, p=p, t=time)
+            j = i
+            break
+        end
+
+        ## update
+        q_old = q
+        t += h
+        qhist[i] = q
+    end
+
+    ## return
+    Sout = State(q=q, p=p, t=time)
+    return fail, Sout, qhist[1:j]
+end
+function euler_var(S::State, N::Int64; sigma::Float64, P::Params, C::Cache, Nchunk::Int64=Int64(1e7))
+    ## setup
+    SS = Copy(S)
+    crosses::Int64 = 0
+    qhist = zeros(Float64, 1)
+    times = Float64[]
+    fail::Int64 = 0
+    time::Float64 = 0.0
+
+    ## integrate
+    for i = 1:N
+        while fail == 0
+            fail, SS, hist = euler_fix_fail(SS::State, Nchunk::Int64; sigma=sigma, P=P, C=C)
+            push!(qhist, hist...)
+            time = SS.t
+        end
+        SS = Copy(S)
+        push!(times, time)
+        crosses += fail
+        fail = 0
+    end
+
+    ## return
+    H = Hist(crosses=crosses, qhist=qhist, times=times)
+    return H
+end
+function integrator_var(SS::State, Nfail::Int64; PP::Params, CC::Cache, ut::Symbol)
+    """
+    Nfail: number of failures
+    limit: q-threshold
+    ut: update type option (:euler!, :baoab!)
+    """
+    ## setup
+    S = Copy(SS)
+    P = Copy(PP)
+    Random.seed!(P.seed)
+
+    ## sigma & integrate
+    if ut == :euler!
+        sigma = sqrt(2.0 * P.h * P.gamma * P.tau)
+        H = euler_var(S::State, Nfail::Int64; sigma=sigma, P=P, C=CC)
+    end
+    return H
+end
 
 ## -----------------------------------------------------------------------------
 ## diagnostics
@@ -328,3 +461,4 @@ function compare_results(H::Hist, P::Params; S0::State)
     out[:lam_ana] = lam_ana
     return out
 end
+## -----------------------------------------------------------------------------
