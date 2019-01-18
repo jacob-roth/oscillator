@@ -53,9 +53,10 @@ mutable struct Hist
     crosses::Int64
     times::Array{Float64,1}
     qhist::Array{Float64,1}
+    phist::Array{Float64,1}
 end
-function Hist(; crosses::Int64, times::Array{Float64,1}, qhist::Array{Float64,1})
-    return Hist(crosses, times, qhist)
+function Hist(; crosses::Int64, times::Array{Float64,1}, qhist::Array{Float64,1}, phist::Array{Float64,1})
+    return Hist(crosses, times, qhist, phist)
 end
 ## -----------------------------------------------------------------------------
 
@@ -87,8 +88,8 @@ function d2Vdx2!(out::Float64, x::Float64, k::Float64)
     # out = (12.0 * k) .* (x.^2 .- 1.0/3.0)
     out = k
 end
-function hh(x, limit)
-    return x - limit
+function hh(q, p, limit)
+    return q - limit
 end
 function dhhdx(x, limit)
 end
@@ -131,9 +132,11 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     j::Int64 = 1
     crosses::Int64 = 0
     qhist = zeros(Float64, N)
+    phist = zeros(Float64, N)
     times = zeros(Float64, max_cross)
     zetas = randn(N)
     qhist[1] = q
+    phist[1] = p
 
     ## integrate
     for i = 2:N
@@ -142,7 +145,8 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
         p += h .* (-gamma .* p .- dVdx!(f, q, k)) .+ (sigma .* zetas[i])
 
         ## check
-        if (q - limit)*(q_old - limit) < 0.0
+        # if (q - limit)*(q_old - limit) < 0.0
+        if (hh(q, p, limit) >= 0.0) && (hh(q_old, p, limit) < 0.0)
             j += 1
             crosses += 1
             times[j] = t + h
@@ -152,131 +156,11 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
         q_old = q
         t += h
         qhist[i] = q
+        phist[i] = p
     end
 
     ## return
-    H = Hist(crosses=crosses, qhist=qhist, times=diff([0; times[1:j]]))
-    return H
-end
-function euler2_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
-                                       max_cross::Int64=Int64(1e4))
-    """
-    example which has wrong asymptotics; note: the h factor on the noise is weird
-    """
-    ## extract
-    q = S.q; p = S.p; t = S.t; q_old = copy(S.q)
-    h = P.h; gamma = P.gamma; k = P.k
-    f = C.dVdx
-
-    ## setup
-    j::Int64 = 1
-    crosses::Int64 = 0
-    qhist = zeros(Float64, N)
-    times = zeros(Float64, max_cross)
-    zetas = randn(N)
-    qhist[1] = q
-
-    ## integrate
-    for i = 2:N
-        ## euler update
-        # q += (-dVdx!(f, q, k) * h^2 + gamma * q * h) / (1.0 + gamma*h) + (sigma .* zetas[i])
-        # q = (h^2*(-dVdx!(f, q, k) + gamma*q/h) + 2.0*q - q_old) / (1.0 - gamma*h) + h^(3/5)*(sigma .* zetas[i])
-        q = (h^2*(-dVdx!(f, q, k) + gamma*q/h) + 2.0*q - q_old) * (1.0 - gamma*h) + sqrt(h)*(sigma .* zetas[i])
-
-        ## check
-        if (q - limit)*(q_old - limit) < 0.0
-            j += 1
-            crosses += 1
-            times[j] = t
-        end
-
-        ## update
-        q_old = q
-        t += h + h
-        qhist[i] = q
-    end
-
-    ## return
-    H = Hist(crosses=crosses, qhist=qhist, times=diff([0; times[1:j]]))
-    return H
-end
-function euler3_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
-                                       max_cross::Int64=Int64(1e4))
-    ## extract
-    q = S.q; p = S.p; t = S.t; q_old = S.q
-    h = P.h; gamma = P.gamma; k = P.k
-    f = C.dVdx
-
-    ## setup
-    j::Int64 = 1
-    crosses::Int64 = 0
-    qhist = zeros(Float64, N)
-    times = zeros(Float64, max_cross)
-    zetas = randn(N)
-    qhist[1] = q
-
-    ## integrate
-    for i = 2:N
-        ## euler update
-        q += h .* p .+ sqrt(h) * (sigma .* zetas[i])
-        p += h .* (-gamma .* p .- dVdx!(f, q, k))
-
-        ## check
-        if (q - limit)*(q_old - limit) < 0.0
-            j += 1
-            crosses += 1
-            times[j] = t + h
-        end
-
-        ## update
-        q_old = q
-        t += h
-        qhist[i] = q
-    end
-
-    ## return
-    H = Hist(crosses=crosses, qhist=qhist, times=diff([0; times[1:j]]))
-    return H
-end
-function baoab_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
-                                       max_cross::Int64=Int64(1e4))
-    ## extract
-    q = S.q; p = S.p; t = S.t; q_old = S.q
-    h = P.h; gamma = P.gamma; k = P.k
-    f = C.dVdx
-
-    ## setup
-    j::Int64 = 1
-    crosses::Int64 = 0
-    qhist = zeros(Float64, N)
-    times = zeros(Float64, max_cross)
-    zetas = randn(N)
-    qhist[1] = q
-
-    ## integrate
-    for i = 2:N
-        ## baoab update
-        p_12 = p - h/2 * dVdx!(f, q, k)
-        q_12 = q + h/2 * p_12 / m
-        p_12_hat = exp(-gamma * h) * p_12 + sigma*zetas[i]
-        q = q_12 + h/2 * p_12_hat / m
-        p = p_12_hat - h/2 .* dVdx!(f, q, k)
-
-        ## check
-        if (q - limit)*(q_old - limit) < 0.0
-            j += 1
-            crosses += 1
-            times[j] = t + h
-        end
-
-        ## update
-        q_old = q
-        t += h
-        qhist[i] = q
-    end
-
-    ## return
-    H = Hist(crosses=crosses, qhist=qhist, times=diff([0; times[1:j]]))
+    H = Hist(crosses=crosses, qhist=qhist, times=diff(times[1:j]), phist=phist)
     return H
 end
 function integrator_fix(SS::State, N::Int64; PP::Params, CC::Cache, ut::Symbol,
@@ -326,6 +210,7 @@ function euler_fix_fail(S::State, N::Int64; sigma::Float64, P::Params, C::Cache)
     j::Int64 = 1
     fail::Int64 = 0
     qhist = zeros(Float64, N)
+    phist = zeros(Float64, N)
     time::Float64 = 0.0
     zetas = randn(N)
     qhist[1] = q
@@ -337,10 +222,11 @@ function euler_fix_fail(S::State, N::Int64; sigma::Float64, P::Params, C::Cache)
         p += h .* (-gamma .* p .- dVdx!(f, q, k)) .+ (sigma .* zetas[i])
 
         ## check
-        if hh(q, limit) > 0.0
+        if hh(q, p, limit) >= 0.0
             fail = 1
             time = t + h
             qhist[i] = q
+            phist[i] = p
             Sout = State(q=q, p=p, t=time)
             j = i
             break
@@ -350,17 +236,19 @@ function euler_fix_fail(S::State, N::Int64; sigma::Float64, P::Params, C::Cache)
         q_old = q
         t += h
         qhist[i] = q
+        phist[i] = p
     end
 
     ## return
     Sout = State(q=q, p=p, t=time)
-    return fail, Sout, qhist[1:j]
+    return fail, Sout, qhist[1:j], phist[1:j]
 end
 function euler_var(S::State, N::Int64; sigma::Float64, P::Params, C::Cache, Nchunk::Int64=Int64(1e7))
     ## setup
     SS = Copy(S)
     crosses::Int64 = 0
-    qhist = zeros(Float64, 1)
+    qhist = Float64[]
+    phist = Float64[]
     times = Float64[]
     fail::Int64 = 0
     time::Float64 = 0.0
@@ -368,18 +256,21 @@ function euler_var(S::State, N::Int64; sigma::Float64, P::Params, C::Cache, Nchu
     ## integrate
     for i = 1:N
         while fail == 0
-            fail, SS, hist = euler_fix_fail(SS::State, Nchunk::Int64; sigma=sigma, P=P, C=C)
-            push!(qhist, hist...)
+            fail, SS, histq, histp = euler_fix_fail(SS::State, Nchunk::Int64; sigma=sigma, P=P, C=C)
+            push!(qhist, histq...)
+            push!(phist, histp...)
             time = SS.t
         end
         SS = Copy(S)
+        SS.q = sigma*randn() - 1.0
+        SS.p = sigma*randn()
         push!(times, time)
         crosses += fail
         fail = 0
     end
 
     ## return
-    H = Hist(crosses=crosses, qhist=qhist, times=times)
+    H = Hist(crosses=crosses, qhist=qhist, phist=phist, times=times)
     return H
 end
 function integrator_var(SS::State, Nfail::Int64; PP::Params, CC::Cache, ut::Symbol)
@@ -414,7 +305,15 @@ function plot_diagnostics(H::Hist, P::Params; subsample=1000)
     xmin = -2.0
     xmax = 2.0
     q = collect(range(xmin, stop=xmax, step=dd))
-    PP = exp.(-V(q, P.k) / P.tau)
+    if P.gamma < 0.01
+        ## NOTE: not sure how to handle in underdamped case
+        PP = exp.(-V(q, P.k) / P.tau)
+    elseif (P.gamma >= 0.01) && (P.gamma <= 10.0)
+        ## NOTE: prefactor gets washed out since constant
+        PP = (2.0*pi*P.gamma)^(-1) * exp.(-V(q, P.k) / P.tau)
+    elseif P.gamma > 10.0
+        PP = exp.(-V(q, P.k) / P.tau)
+    end
     den = sum(PP) * dd
     ax1[:plot](q, PP ./ den, label="analytic")
     ax1[:set_xlim](xmin, xmax)
@@ -432,6 +331,7 @@ function compare_results(H::Hist, P::Params; S0::State)
     q0 = S0.q
     qt = P.limit
     Etau_ana = exp(abs(V(qt, P.k) - V(q0, P.k)) / P.tau)
+    ## TODO: should have three separate analytic calcs depending on gamma?
     lam_ana = exp(-abs(V(qt, P.k) - V(q0, P.k)) / P.tau) / (2.0 * pi * P.gamma)
 
     Etau_dns_1 = (H.crosses / length(H.qhist)) / P.h
