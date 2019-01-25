@@ -84,36 +84,51 @@ function dVdx!(out::Float64, x::Float64, k::Float64)
     # out = (-4.0 * k) .* x .* (1.0 .- x.^2)
     out = k .* (x .+ 1.0)
 end
+function d2Vdx2(x::Float64, k::Float64)
+    return k
+end
 function d2Vdx2!(out::Float64, x::Float64, k::Float64)
     # out = (12.0 * k) .* (x.^2 .- 1.0/3.0)
     out = k
 end
 function hh(q, p, limit)
     return q - limit
+    # return p - limit
 end
-function dhhdx(x, limit)
+function dhhdx(q, p, limit)
+    return [1.0; 0.0]
 end
 
 function analytic(Sbar::State, Sstar::State, P::Params)
     ## setup
     qbar = Sbar.q
     qstar = Sstar.q
-    Gstar = dVdx(qstar, P.k)
-    gstar = dCdx(qstar, P.k)
+    pbar = Sbar.p
+    pstar = Sstar.p
+    Gstar = [dVdx(qstar, P.k); 0.0]
+    gstar = dhhdx(qstar, pstar, P.limit)
+    S = [1.0 0.0; 0.0 0.0]
 
     ## hessians
-    Hbar = energy_h(xbar, theta)                   ## energy hess at x_eq0
-    Hstar = energy_h(xstar, theta)                 ## energy hess at x_eqc
-    hstar = constraint_h(xstar, theta, l, c_type)  ## constraint hess at x_eqc
+    Hbar = d2Vdx2(qbar, P.k)                  ## energy hess at x_eq0
+    Hstar = d2Vdx2(qstar, P.k)                ## energy hess at x_eqc
+    hstar = 0.0                               ## constraint hess at x_eqc
 
     ## calc B
-    n = gstar / norm(gstar)
-    n = reshape(n, length(xbar), 1)
+    n = gstar ./ norm(gstar)
+    n = reshape(n, length(n), 1)
     E = nullspace(Matrix(n'))
     B = det(E'*(Hstar - k*hstar)*E) * (norm(Gstar)^2 / det(E'*E))
     @assert(B > 0)
 
-    pf = P.gamma *1
+    ## calc rate
+    pf = P.gamma .* Gstar'*S*Gstar
+    pf *= sqrt(det(Hbar) / (2*pi*P.tau*abs(B)))
+    estar = V(qstar, P.k)
+    ebar = V(qbar, P.k)
+    ef = exp(-( estar - ebar ) / P.tau)
+    lam = pf * ef
+    return [pf, ef, lam]
 end
 ## -----------------------------------------------------------------------------
 
@@ -124,7 +139,7 @@ end
 function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
                                        max_cross::Int64=Int64(1e4))
     ## extract
-    q = S.q; p = S.p; t = S.t; q_old = S.q
+    q = S.q; p = S.p; t = S.t; q_old = S.q; p_old = S.p
     h = P.h; gamma = P.gamma; k = P.k
     f = C.dVdx
 
@@ -135,18 +150,21 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
     phist = zeros(Float64, N)
     times = zeros(Float64, max_cross)
     zetas = randn(N)
+    etas = randn(N)
     qhist[1] = q
     phist[1] = p
 
     ## integrate
     for i = 2:N
         ## euler update
-        q += p .* h
-        p += h .* (-gamma .* p .- dVdx!(f, q, k)) .+ (sigma .* zetas[i])
+        # q += p .* h
+        # p += h .* (-gamma .* p .- dVdx!(f, q, k)) .+ (sigma .* zetas[i])
+        q += h .* (-gamma*dVdx!(f, q, k) .+ p) .+ (sigma .* etas[i])
+        p += h .* (- dVdx!(f, q, k))
 
         ## check
         # if (q - limit)*(q_old - limit) < 0.0
-        if (hh(q, p, limit) >= 0.0) && (hh(q_old, p, limit) < 0.0)
+        if (hh(q, p, limit) >= 0.0) && (hh(q_old, p_old, limit) < 0.0)
             j += 1
             crosses += 1
             times[j] = t + h
@@ -154,6 +172,7 @@ function euler_fix(S::State, N::Int64; sigma::Float64, P::Params, C::Cache,
 
         ## update
         q_old = q
+        p_old = p
         t += h
         qhist[i] = q
         phist[i] = p
@@ -213,13 +232,16 @@ function euler_fix_fail(S::State, N::Int64; sigma::Float64, P::Params, C::Cache)
     phist = zeros(Float64, N)
     time::Float64 = 0.0
     zetas = randn(N)
+    etas = randn(N)
     qhist[1] = q
 
     ## integrate
     for i = 2:N
         ## euler update
-        q += p .* h
-        p += h .* (-gamma .* p .- dVdx!(f, q, k)) .+ (sigma .* zetas[i])
+        # q += p .* h
+        # p += h .* (-gamma .* p .- dVdx!(f, q, k)) .+ (sigma .* zetas[i])
+        q += h .* (-gamma*dVdx!(f, q, k) .+ p) .+ (sigma .* etas[i])
+        p += h .* (- dVdx!(f, q, k))
 
         ## check
         if hh(q, p, limit) >= 0.0
@@ -262,8 +284,8 @@ function euler_var(S::State, N::Int64; sigma::Float64, P::Params, C::Cache, Nchu
             time = SS.t
         end
         SS = Copy(S)
-        SS.q = sigma*randn() - 1.0
-        SS.p = sigma*randn()
+        # SS.q = sigma*randn() - 1.0
+        # SS.p = sigma*randn()
         push!(times, time)
         crosses += fail
         fail = 0
@@ -298,32 +320,50 @@ end
 function plot_diagnostics(H::Hist, P::Params; subsample=1000)
     ## histogram / density
     fig = figure(figsize=(10, 8))
-    ax1 = fig[:add_subplot](2,1,1)
+    ax1 = fig[:add_subplot](3,1,1)
     n, bins, patches = ax1[:hist](H.qhist, 100, normed=1, label="numerical");
     println(patches)
     dd = bins[2] - bins[1]
     xmin = -2.0
     xmax = 2.0
     q = collect(range(xmin, stop=xmax, step=dd))
-    if P.gamma < 0.01
-        ## NOTE: not sure how to handle in underdamped case
-        PP = exp.(-V(q, P.k) / P.tau)
-    elseif (P.gamma >= 0.01) && (P.gamma <= 10.0)
-        ## NOTE: prefactor gets washed out since constant
-        PP = (2.0*pi*P.gamma)^(-1) * exp.(-V(q, P.k) / P.tau)
-    elseif P.gamma > 10.0
-        PP = exp.(-V(q, P.k) / P.tau)
-    end
+
+    PP = P.gamma / (2.0 * pi * P.tau) .* exp.(-V(q, P.k) / P.tau)
+    Sbar = State(q=-1.0, p=0.0, t=0.0)
+    Sstar = State(q=0.0, p=0.0, t=0.0)
+    lam_ana = analytic(Sbar, Sstar, P)[3][1]
+    # if P.gamma <= 0.01
+    #     ## NOTE: not sure how to handle in underdamped case
+    #     PP = P.gamma / (2.0 * pi * P.tau) * exp.(-V(q, P.k) / P.tau)
+    #     lam_ana = P.gamma * exp(-abs(V(P.limit, P.k) - V(-1, P.k)) / P.tau) / (2.0 * pi * P.tau)
+    # elseif (P.gamma > 0.01) && (P.gamma < 10.0)
+    #     ## NOTE: prefactor gets washed out since constant
+    #     PP = (2.0*pi)^(-1) * exp.(-V(q, P.k) / P.tau)
+    #     lam_ana = exp(-abs(V(P.limit, P.k) - V(-1, P.k)) / P.tau) / (2.0 * pi)
+    # elseif P.gamma >= 10.0
+    #     PP = exp.(-V(q, P.k) / P.tau)
+    #     lam_ana = exp(-abs(V(P.limit, P.k) - V(-1, P.k)) / P.tau) / (2.0 * pi * P.gamma)
+    # end
+
     den = sum(PP) * dd
     ax1[:plot](q, PP ./ den, label="analytic")
     ax1[:set_xlim](xmin, xmax)
     legend()
 
     ## time series
-    ax2 = fig[:add_subplot](2,1,2)
+    ax2 = fig[:add_subplot](3,1,2)
     ts = collect(range(P.h, stop=length(H.qhist)*P.h, step=P.h))[1:subsample:end]
     qs = H.qhist[1:subsample:end]
     ax2[:plot](ts, qs, label="position time-series")
+    legend()
+
+    ax3 = fig[:add_subplot](3,1,3)
+    ax3[:hist](H.times, density=true)
+    yscale("log", nonposy="clip")
+    lam_dns = 1.0 / mean(H.times)
+    x = collect(range(0, stop=maximum(H.times), length=1000))
+    ax3[:plot](x, lam_ana .* exp.(-lam_ana .* x), label="analytic = $(round.(lam_ana, digits=5))")
+    ax3[:plot](x, lam_dns .* exp.(-lam_dns .* x), label="dns = $(round.(lam_dns, digits=5))")
     legend()
     fig[:show]()
 end
@@ -332,7 +372,11 @@ function compare_results(H::Hist, P::Params; S0::State)
     qt = P.limit
     Etau_ana = exp(abs(V(qt, P.k) - V(q0, P.k)) / P.tau)
     ## TODO: should have three separate analytic calcs depending on gamma?
-    lam_ana = exp(-abs(V(qt, P.k) - V(q0, P.k)) / P.tau) / (2.0 * pi * P.gamma)
+    # lam_ana = exp(-abs(V(qt, P.k) - V(q0, P.k)) / P.tau) / (2.0 * pi * P.gamma)
+
+    Sbar = State(q=-1.0, p=0.0, t=0.0)
+    Sstar = State(q=0.0, p=0.0, t=0.0)
+    lam_ana = analytic(Sbar, Sstar, P)[3][1]
 
     Etau_dns_1 = (H.crosses / length(H.qhist)) / P.h
     Etau_dns_2 = mean(H.times)
