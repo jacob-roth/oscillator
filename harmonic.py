@@ -1,4 +1,4 @@
-
+## ref: https://canvas.ucsc.edu/courses/1077/pages/diffusion-in-double-well-potential
 from scipy import *
 from pylab import *
 import time

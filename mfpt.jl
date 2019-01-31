@@ -76,6 +76,16 @@ function d2Vdx2(out::Float64, x::Float64, k::Float64)
     # return (12.0 * k) .* (x.^2 .- 1.0/3.0)
     return k
 end
+function H(q, p, k)
+    return V(q,k) + 0.5*p^2
+end
+function dHdx(q, p, k)
+    return [dVdx(q,k); 0.0]
+end
+function d2Hdx2(q, p, k)
+    return [d2Vdx2(q,k) 0.0; 0.0 1.0]
+end
+
 function V!(out::Float64, x::Float64, k::Float64)
     # out = k .* (1.0 .- x.^2).^2
     out = 0.5*k .* (x .+ 1.0).^2
@@ -91,13 +101,29 @@ function d2Vdx2!(out::Float64, x::Float64, k::Float64)
     # out = (12.0 * k) .* (x.^2 .- 1.0/3.0)
     out = k
 end
+## linear
+# function hh(q, p, limit)
+#     return q - limit
+#     # return p - limit
+# end
+# function dhhdx(q, p, limit)
+#     return [1.0; 0.0]
+# end
+function dhh2dx2(q, p, limit)
+    return [0.0 0.0; 0.0 0.0]
+end
+## quadratic
 function hh(q, p, limit)
-    return q - limit
+    return q^2 - limit
     # return p - limit
 end
 function dhhdx(q, p, limit)
-    return [1.0; 0.0]
+    return [2.0*q; 0.0]
 end
+function dhh2dx2(q, p, limit)
+    return [2.0 0.0; 0.0 0.0]
+end
+
 
 function analytic(Sbar::State, Sstar::State, P::Params)
     ## setup
@@ -110,15 +136,15 @@ function analytic(Sbar::State, Sstar::State, P::Params)
     S = [1.0 0.0; 0.0 0.0]
 
     ## hessians
-    Hbar = d2Vdx2(qbar, P.k)                  ## energy hess at x_eq0
-    Hstar = d2Vdx2(qstar, P.k)                ## energy hess at x_eqc
-    hstar = 0.0                               ## constraint hess at x_eqc
+    Hbar = d2Hdx2(qbar, pbar, P.k)           ## energy hess at x_eq0
+    Hstar = d2Hdx2(qstar, pstar, P.k)        ## energy hess at x_eqc
+    hstar = dhh2dx2(qstar, pstar, P.limit)   ## constraint hess at x_eqc
 
     ## calc B
     n = gstar ./ norm(gstar)
     n = reshape(n, length(n), 1)
     E = nullspace(Matrix(n'))
-    B = det(E'*(Hstar - k*hstar)*E) * (norm(Gstar)^2 / det(E'*E))
+    B = det(E'*(Hstar - k .* hstar)*E) * (norm(Gstar)^2 / det(E'*E))
     @assert(B > 0)
 
     ## calc rate
