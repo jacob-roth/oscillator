@@ -2,6 +2,7 @@
 ## efficient
 ## -----------------------------------------------------------------------------
 function U!(C::Cache)
+    ## u = p^T I p + q^T B q - P_actID^T q_actID
     ## p^T I p
     C.E.pe = 0.0
     @simd for i in eachindex(C.S.p)
@@ -9,23 +10,32 @@ function U!(C::Cache)
     end
     C.E.pe *= 0.5
 
-    ## 0.5 sin(q)^T Y sin(q)
+    ## 0.5 q^T B q
     C.E.ke = 0.0
     @simd for i in eachindex(C.S.q)
         @simd for j in eachindex(C.S.q)
-            @inbounds @views C.E.ke += C.Y[i,j] * sin(C.S.q[i]) * sin(C.S.q[j])
+            @inbounds @views C.E.ke += C.B[i,j] * C.S.q[i] * C.S.q[j]
         end
     end
     C.E.ke *= 0.5
-    C.E.te = C.E.pe + C.E.ke
+
+    ## P^T q (!! excluding reference !!)
+    C.E.de = 0.0
+    @simd for id in C.S.actID
+        @inbounds @views C.E.de -= C.P[id] * C.S.q[id]
+    end
+
+    C.E.te = C.E.pe + C.E.ke + C.E.de
     nothing
 end
 
 function dUdq!(C::Cache)
-    ## Y sin(q) ∘ cos(q)
-    mul!(C.grad_q, C.Y, sin.(C.S.q))
-    @simd for i in eachindex(C.S.q)
-        @inbounds @views C.grad_q[i] *= cos(C.S.q[i])
+    ## B_actID q_actID
+    mul!(C.grad_q, C.B, C.S.q)
+    C.grad_q[C.S.refID] = 0.0
+    ## P (!! excluding reference !!)
+    @simd for id in C.S.actID
+        @inbounds @views C.grad_q[id] -= C.P[id]
     end
     nothing
 end
@@ -78,9 +88,11 @@ function feuler!(C::Cache)
 end
 
 function constraint!(C::Cache)
-    """ !! assumes `C.S.L`'s links are sorted !! """
-    for i in eachindex(C.S.L)
-        C.CE.e[i] = abs(sin(C.S.q[C.S.L[i].head] - C.S.q[C.S.L[i].tail]))
+    """ !! assumes `C.S.L`'s links are sorted and ordered within C.CE!! """
+    """ linear link `l = (i,j)`: b_{ij} |θ_i - θ_j| ≥ α * b_{ij} """
+    @simd for i in eachindex(C.S.L)
+        @inbounds @views C.CE.ce[i] = C.S.L[i].b * abs(C.S.q[C.S.L[i].head] - C.S.q[C.S.L[i].tail])
+        @inbounds @views C.CE.failed[i] = C.CE.ce[i] >= C.CE.limit[i]
     end
 end
 
@@ -147,31 +159,39 @@ end
 ## -----------------------------------------------------------------------------
 ## convenient
 ## -----------------------------------------------------------------------------
-function U(q, p, Y::AbstractArray)
-    return 0.5 * (p'*p + (sin.(q)' * Y * sin.(q)))
+function U(q, p, B::AbstractArray, P::AbstractArray, refID::Int64)
+    return 0.5 * (p' * p + q' * B * q) - P[1:end .!= refID]' * q[1:end .!= refID]
 end
-function dU(q, p, Y::AbstractArray)
+function dU(q, p, B::AbstractArray, P::AbstractArray, refID::Int64)
     n = length(q); @assert(n == length(p))
     N = 2n
     x = [q; p]
-    u = x -> (q = x[1:n]; p = x[(n+1):(N)]; U(q, p, Y))
+    u = x -> (q = x[1:n]; p = x[(n+1):(N)]; U(q, p, B, P, refID))
     return ForwardDiff.gradient(u, x)
 end
-function d2U(q, p, Y::AbstractArray)
+function d2U(q, p, B::AbstractArray, P::AbstractArray, refID::Int64)
     n = length(q); @assert(n == length(p))
     N = 2n
     x = [q; p]
-    u = x -> (q = x[1:n]; p = x[(n+1):(N)]; U(q, p, Y))
+    u = x -> (q = x[1:n]; p = x[(n+1):(N)]; U(q, p, B, P, refID))
     return ForwardDiff.hessian(u, [q; p])
 end
 function constraint(q, p, L::Link)
-    return abs(sin(q[L.head] - q[L.tail]))
+    return L.b * abs(q[L.head] - q[L.tail])
 end
-function constraint(q, p, L::Link)
-    return abs(sin(q[L.head] - q[L.tail]))
+function dconstraint(q, p, L::Link)
+    n = length(q); @assert(n == length(p))
+    N = 2n
+    x = [q; p]
+    c = x -> (q = x[1:n]; p = x[(n+1):(N)]; constraint(q, p, B))
+    return ForwardDiff.gradient(c, x)
 end
-function constraint(q, p, L::Link)
-    return abs(sin(q[L.head] - q[L.tail]))
+function d2constraint(q, p, L::Link)
+    n = length(q); @assert(n == length(p))
+    N = 2n
+    x = [q; p]
+    c = x -> (q = x[1:n]; p = x[(n+1):(N)]; constraint(q, p, B))
+    return ForwardDiff.hessian(c, [q; p])
 end
 
 ## -----------------------------------------------------------------------------

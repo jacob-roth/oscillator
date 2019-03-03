@@ -56,12 +56,11 @@ function simulate_fail(S::State, parms::Dict)
         ## check constraint
         if fail_kind == 0
             ## any failure
-            @inbounds @views newfails .= (C.CE.e .>= limit)
-            if any(newfails)
+            if sum(C.CE.failed) > 0
                 ## update
                 fail += 1
                 fail_idx = i+1
-                fail_ID = collect(1:C.NL)[newfails]
+                fail_ID = collect(1:C.NL)[C.CE.failed]
                 ## display
                 if verb
                     println("    !! (any) constraint failure !!")
@@ -71,7 +70,7 @@ function simulate_fail(S::State, parms::Dict)
             end
         else
             ## specific  failure
-            if C.les[lf_kind] >= limit[lf_kind]
+            if C.CE.failed[lf_kind]
                 fail += 1
                 fail_idx = i+1
                 fail_ID = lf_kind
