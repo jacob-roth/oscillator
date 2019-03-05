@@ -4,20 +4,20 @@
 function U!(C::Cache)
     ## u = p^T I p + q^T B q - P_actID^T q_actID
     ## p^T I p
-    C.E.ke = 0.0
-    @simd for i in eachindex(C.S.p)
-        @inbounds @views C.E.ke += C.S.p[i]^2
-    end
-    C.E.ke *= 0.5
-
-    ## 0.5 q^T B q
     C.E.pe = 0.0
-    @simd for i in eachindex(C.S.q)
-        @simd for j in eachindex(C.S.q)
-            @inbounds @views C.E.pe += C.B[i,j] * C.S.q[i] * C.S.q[j]
-        end
+    @simd for i in eachindex(C.S.p)
+        @inbounds @views C.E.pe += C.S.p[i]^2
     end
     C.E.pe *= 0.5
+
+    ## 0.5 q^T B q
+    C.E.ke = 0.0
+    @simd for i in eachindex(C.S.q)
+        @simd for j in eachindex(C.S.q)
+            @inbounds @views C.E.ke += C.B[i,j] * C.S.q[i] * C.S.q[j]
+        end
+    end
+    C.E.ke *= 0.5
 
     ## P^T q (!! excluding reference !!)
     C.E.de = 0.0
